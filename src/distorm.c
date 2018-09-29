@@ -10,14 +10,14 @@ This library is licensed under the BSD license. See the file COPYING.
 */
 
 
-#include "../include/distorm.h"
+#include "distorm.h"
 #include "config.h"
 #include "decoder.h"
 #include "x86defs.h"
 #include "textdefs.h"
 #include "wstring.h"
-#include "../include/mnemonics.h"
-
+#include "mnemonics.h"
+#include <assert.h>
 /* C DLL EXPORTS */
 #ifdef SUPPORT_64BIT_OFFSET
 	_DLLEXPORT_ _DecodeResult distorm_decompose64(_CodeInfo* ci, _DInst result[], unsigned int maxInstructions, unsigned int* usedInstructionsCount)
@@ -410,4 +410,215 @@ static void distorm_format_signed_disp(_WString* str, const _DInst* di, uint64_t
 _DLLEXPORT_ unsigned int distorm_version()
 {
 	return __DISTORMV__;
+}
+typedef enum
+{
+	OP_HASNONE = 0,
+	OP_HASDISP = 1,
+	OP_HASIMME = 2
+} OPVALUE_TYPE;
+int judgeOp(_DInst* inst)
+{
+	int na = 0;
+	_Operand* rand = 0;
+	for (; na < OPERANDS_NO; ++na)
+	{
+		rand = &inst->ops[na];
+		if (rand->type == O_IMM || rand->type == O_IMM1 || rand->type == O_IMM2 || rand->type == O_PC)
+		{
+			return (OP_HASIMME << 4) | na;
+		}
+		else if (rand->type == O_DISP || rand->type == O_SMEM || rand->type == O_MEM)
+		{
+			return (OP_HASDISP << 4) | na;
+		}
+	}
+	return 0;
+}
+
+int get_bit_size(int bits)
+{
+	return bits / 8;
+}
+
+int imme_value(_DInst* inst, AssemblePattern* pattern)
+{
+	if (inst && pattern)
+	{
+		int valtype = judgeOp(inst);
+		if (valtype != 0 && valtype & 32)
+		{
+			_Operand* rand = &inst->ops[valtype & 0xf];
+			unsigned long vsize = get_bit_size(rand->size);
+			switch (vsize)
+			{
+			case 1:
+			{
+				pattern->value.sbyte = inst->imm.sbyte;
+				pattern->valsize = 8;
+				break;
+			}
+			case 2:
+			{
+				pattern->value.sword = inst->imm.sword;
+				pattern->valsize = 16;
+				break;
+			}
+			case 4:
+			{
+				pattern->value.sdword = inst->imm.sdword;
+				pattern->valsize = 32;
+				break;
+			}
+			case 8:
+			{
+				pattern->value.sqword = inst->imm.sqword;
+				pattern->valsize = 64;
+				break;
+			}
+			default:
+				assert(0);
+				return 0;
+			}
+			return 1;
+		}
+	}
+	return 0;
+}
+int disp_value(_DInst* inst, AssemblePattern* pattern)
+{
+	if (inst && pattern)
+	{
+		unsigned long vsize = get_bit_size(inst->dispSize);
+		if (vsize != 0)
+		{
+			switch (vsize)
+			{
+			case 1:
+			{
+				pattern->value.byte = inst->disp & 0xff;
+				pattern->valsize = 8;
+				break;
+			}
+			case 2:
+			{
+				pattern->value.word = inst->disp & 0xffff;
+				pattern->valsize = 16;
+				break;
+			}
+			case 4:
+			{
+				pattern->value.dword = inst->disp & 0xffffffff;
+				pattern->valsize = 32;
+				break;
+			}
+			case 8:
+			{
+				pattern->value.qword = inst->disp;
+				pattern->valsize = 64;
+				break;
+			}
+			default:
+				assert(0);
+				return 0;
+			}
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void process_pattern(_DInst* inst, AssemblePattern* pattern)
+{
+	if (inst && pattern)
+	{
+		if ((inst->flags & FLAG_RIP_RELATIVE))
+		{
+			pattern->value.addr = pattern->address + INSTRUCTION_GET_RIP_TARGET(inst);
+		}
+		else if (inst->opcode == I_CALL || inst->opcode == I_JMP)
+		{
+			pattern->value.addr = pattern->address + INSTRUCTION_GET_TARGET(inst);
+		}
+			
+	}
+}
+int pattern_match(_DInst* inst, AssemblePattern* pattern)
+{
+	int ret = 0;
+	if (inst && pattern && inst->opcode == pattern->op)
+	{
+		pattern->instsize = inst->size;
+		switch (pattern->select)
+		{
+		case VALUE_DISPLACEMENT:
+		{
+			ret = disp_value(inst, pattern);
+			break;
+		}
+		case VALUE_IMMEDIATION:
+		{
+			ret = imme_value(inst, pattern);
+			break;
+		}
+		case VALUE_OFFSET:
+		{
+			ret = 1;
+			pattern->value.addr = pattern->address;
+		}
+		default:
+			return ret;
+		}
+		if(ret == 1)
+			process_pattern(inst, pattern);
+	}
+	return ret;
+}
+int pattern_search(uint8_t* addr, _DecodeType type, AssemblePattern* pattern)
+{
+	_DInst di;
+	_CodeInfo ci;
+	unsigned int used;
+	ci.code = addr;
+	ci.codeOffset = 0;
+	ci.codeLen = 15;
+	ci.dt = type;
+	ci.features = DF_NONE;
+	memset(&di, 0, sizeof(di));
+	used = 0;
+	pattern->address = ci.code + ci.codeOffset;
+	if (DECRES_SUCCESS == distorm_decompose(&ci, &di, 1, &used))
+	{
+		return pattern_match(&di, pattern);
+	}
+	return 0;
+}
+int instruction_step(uint8_t* addr, _DecodeType type, uint8_t line, uint8_t** target)
+{
+	int n;
+	if (!addr || !target || !*target)
+	{
+		return 0;
+	}
+	n = 0;
+	for (; n < line; n++)
+	{
+		_DInst di;
+		_CodeInfo ci;
+		unsigned int used;
+		ci.code = addr;
+		ci.codeOffset = 0;
+		ci.codeLen = 15;
+		ci.dt = type;
+		ci.features = DF_NONE;
+		memset(&di, 0, sizeof(di));
+		used = 0;
+		if (DECRES_SUCCESS != distorm_decompose(&ci, &di, 1, &used))
+		{
+			return 0;
+		}
+		addr += di.size;
+	}
+	*target = addr;
+	return 1;
 }

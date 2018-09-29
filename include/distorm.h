@@ -463,7 +463,28 @@ typedef enum { DECRES_NONE, DECRES_SUCCESS, DECRES_MEMORYERR, DECRES_INPUTERR, D
 #endif /*DISTORM_LIGHT*/
 
 #endif
+typedef enum { VALUE_DISPLACEMENT, VALUE_IMMEDIATION,VALUE_OFFSET }AsmValueSelect;
+typedef struct {
+	uint8_t* address;
+	uint8_t instsize;
+	_Value value;
+	uint16_t valsize;
+	uint16_t op;
+	AsmValueSelect select;
+}AssemblePattern;
 
+//获取指令中的立即数，如果没有立即数，则返回0，如果找到，则返回1
+int imme_value(_DInst* inst, AssemblePattern* pattern);
+//获取指令中的displacement，如果没有立即数，则返回0，如果找到，则返回1
+int disp_value(_DInst* inst, AssemblePattern* pattern);
+
+//模式化获取需要的特定数据
+//获取成功返回1，获取失败返回0，填充pattern的op和select，输出返回到pattern中的value，以及类型type
+int pattern_match(_DInst* inst, AssemblePattern* pattern);
+int pattern_search(uint8_t* addr, _DecodeType type, AssemblePattern* pattern);
+//获取当前代码以下的line行的位置
+//成功返回1，失败返回0
+int instruction_step(uint8_t* addr, _DecodeType type, uint8_t line, uint8_t** target);
 /*
  * distorm_version
  * Input:
