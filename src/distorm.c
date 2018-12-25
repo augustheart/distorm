@@ -424,11 +424,11 @@ int judgeOp(_DInst* inst)
 	for (; na < OPERANDS_NO; ++na)
 	{
 		rand = &inst->ops[na];
-		if (rand->type == O_IMM || rand->type == O_IMM1 || rand->type == O_IMM2 || rand->type == O_PC)
+		if (rand->type == O_IMM || rand->type == O_IMM1 || rand->type == O_IMM2 || rand->type == O_PC || rand->type == O_SMEM)
 		{
 			return (OP_HASIMME << 4) | na;
 		}
-		else if (rand->type == O_DISP || rand->type == O_SMEM || rand->type == O_MEM)
+		else if (rand->type == O_DISP || rand->type == O_MEM)
 		{
 			return (OP_HASDISP << 4) | na;
 		}
